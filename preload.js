@@ -34,6 +34,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getStartupStatus: () => ipcRenderer.invoke('get-startup-status'),
   getInstallScope: () => ipcRenderer.invoke('get-install-scope'),
   openPlayerMode: () => ipcRenderer.invoke('open-player-mode'),
+  openTrackerMode: () => ipcRenderer.invoke('open-tracker-mode'),
   openMainUI: () => ipcRenderer.invoke('open-main-ui'),
   savePlaybackState: (state) => ipcRenderer.invoke('save-playback-state', state),
   getPlaybackState: () => ipcRenderer.invoke('get-playback-state'),
@@ -55,6 +56,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getThumbnailPath: (localPath, mtimeMs) => ipcRenderer.invoke('get-thumbnail-path', localPath, mtimeMs),
   saveThumbnail: (localPath, mtimeMs, dataUrl) => ipcRenderer.invoke('save-thumbnail', localPath, mtimeMs, dataUrl),
   generateVideoThumbnail: (localPath, mtimeMs) => ipcRenderer.invoke('generate-video-thumbnail', localPath, mtimeMs),
+  getTrackerInfoByPath: (filePath) => ipcRenderer.invoke('get-tracker-info-by-path', filePath),
   pathToFileURL: (p) => {
     try {
       const urlMod = require('url')
@@ -92,6 +94,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
   onTransferProgress: (callback) => ipcRenderer.on('transfer-progress', (_e, data) => callback(data)),
   onTransferComplete: (callback) => ipcRenderer.on('transfer-complete', (_e, data) => callback(data)),
   onTransferError: (callback) => ipcRenderer.on('transfer-error', (_e, data) => callback(data)),
+  
+  checkForAppUpdate: () => ipcRenderer.invoke('check-for-app-update'),
+  downloadAndInstallUpdate: (info) => ipcRenderer.invoke('download-and-install-update', info),
+  onUpdateDownloadProgress: (cb) => ipcRenderer.on('update-download-progress', (_e, data) => cb(data)),
   
   removeAllListeners: (channel) => ipcRenderer.removeAllListeners(channel)
 });

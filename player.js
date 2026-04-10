@@ -28,6 +28,7 @@ let thumbObserver = null
 let enhanceQueue = []
 let enhanceActive = 0
 const ENHANCE_CONCURRENCY = Math.max(1, Math.min(3, (navigator.hardwareConcurrency||2)))
+const ERA_DISPLAY_NAMES = { "jute": "JUICED UP THE EP", "LND": "Legends Never Die", "afflictions": "Afflictions", "AFF": "Afflictions", "HIH 999": "Heartbroken In Hollywood 999", "jw 999": "JuiceWRLD 999", "bdm": "BINGEDRINKINGMUSIC", "ND": "NOTHINGS DIFFERENT </3", "GB&GR": "Goodbye & Good Riddance", "WOD": "WRLD On Drugs", "DRFL": "Death Race For Love", "OUT": "Outsiders", "POST": "Posthumous", "TPP": "The Pre-Party", "TPP (EE)": "The Pre-Party (Extended Edition)", "FD": "Fighting Demons", "FD (DDE)": "Fighting Demons (Digital Deluxe Edition)", "TPNE": "The Party Never Ends", "TPNE 2.0": "The Party Never Ends 2.0", "LND (5YAE)": "Legends Never Die (5 Year Anniversary Edition)", "Mainstream": "Mainstream Release", "GB&GR (AE)": "Goodbye & Good Riddance (Anniversary Edition)", "GB&GR (5YAE)": "Goodbye & Good Riddance (5 Year Anniversary Edition)", "UNS: JW": "Up Next Session: Juice WRLD", "FD (CE)": "Fighting Demons (Complete Edition)", "Smule": "Smule Recordings", "YouTube": "YouTube Release", "SoundCloud": "SoundCloud Release", "KILL'S WRLD": "Kill's WRLD", "TTZ": "The Twilight Zone", "DRFL (TV)": "Death Race For Love (TV Mix)", "WTLA": "Whatever, They Leaked Already", "LND (EOV)": "Legends Never Die (Extended Outro Version)", "AGATS2 (AV)": "All Girls Are The Same 2 (Alternate Versions)", "Vinyl": "Vinyl Exclusive" }
 let playHistory = []
 let currentVirtualizer = null
 let inDetailView = false
@@ -42,6 +43,18 @@ let crossfadeDuration = 0
 let crossfadeActive = false
 let crossfadeInterval = null
 let crossfadeAudio = null
+
+function shortenArtFilepath(fullPath){
+  if(!fullPath || typeof fullPath !== 'string') return fullPath
+  let decoded = fullPath
+  try{ decoded = decodeURIComponent(fullPath) }catch(_){ }
+  const parts = decoded.split('/').filter(Boolean)
+  if(parts.length <= 1) return fullPath
+  const dirs = parts.slice(0, -1)
+  const filename = parts[parts.length - 1]
+  const shortDirs = dirs.map(d => d.slice(0, 3))
+  return [...shortDirs, filename].join('/')
+}
 
 function computeCollectionsCacheKey(){
   let maxM = 0
@@ -2083,9 +2096,23 @@ async function setDiscordPresenceForItem(item, isPlaying){
         const settings = await window.electronAPI.getSettings()
         const base = (settings && settings.serverUrl) ? String(settings.serverUrl).trim() : 'https://m.juicewrldapi.com'
         const norm = base.endsWith('/') ? base.slice(0,-1) : base
-        const albumArtUrl = `${norm}/album-art?filepath=${encodeURIComponent(serverPath)}`
-        payload.largeImageKey = albumArtUrl
-        payload.largeImageText = item.title || 'JuiceWRLD API'
+        const shortPath = shortenArtFilepath(serverPath)
+        const albumArtUrl = `${norm}/art?filepath=${encodeURIComponent(shortPath)}`
+        if(albumArtUrl.length <= 256){
+          payload.largeImageKey = albumArtUrl
+          payload.largeImageText = item.title || 'JuiceWRLD API'
+        }
+        const lastSlash = serverPath.lastIndexOf('/')
+        const dirPart = lastSlash > 0 ? serverPath.substring(0, lastSlash) : ''
+        const filePart = lastSlash > 0 ? serverPath.substring(lastSlash + 1) : serverPath
+        const listenUrl = dirPart
+          ? `https://juicewrldapi.com/files/${encodeURIComponent(dirPart)}?highlight=${encodeURIComponent(filePart)}`
+          : `https://juicewrldapi.com/files/?highlight=${encodeURIComponent(filePart)}`
+        if(listenUrl.length <= 512){
+          payload.buttons = [
+            { label: 'Listen on API', url: listenUrl }
+          ]
+        }
       }catch(_){ }
     }
     if(isPlaying && durationMs > 0){
@@ -2217,13 +2244,17 @@ async function playIndex(idx){
   
   updateNowPlaying(item)
   pushPlayHistory(item)
+  updateRepeatBtnUI()
+  if(repeatMode === 1){
+    queue.push({ ...item })
+    refreshQueuePanel()
+  }
   media.play().then(()=>{
     setPlayingState(true)
     updateQueueUIOnPlay()
     startNowPlayingUpdates(item)
     lastLocalControlAt = Date.now()
     try{ broadcastRoomSync({ is_playing: true, position_ms: safePositionMs(), server_path: serverPath, track_title: item.title||'Unknown', artist_name: item.artist||'', album_name: item.album||'' }) }catch(_){ }
-    try{ setDiscordPresenceForItem(item, true) }catch(_){ }
     try{ updateVisualizer() }catch(_){}
   }).catch(()=>{
     setPlayingState(false)
@@ -2301,18 +2332,23 @@ function togglePlay(){
 
 function next(){
   if(queue.length===0) return
-  
+  if(repeatMode === 2 && currentIndex >= 0 && currentIndex < queue.length){
+    const m = getMedia()
+    if(m){
+      m.currentTime = 0
+      m.play().catch(()=>{})
+    }
+    return
+  }
   const removed = currentIndex >= 0 && currentIndex < queue.length
   if(removed){
     queue.splice(currentIndex, 1)
     refreshQueuePanel()
   }
-  
   if(queue.length === 0){
     clearPlaybar()
     return
   }
-  
   if(currentIndex >= queue.length){
     if(repeatMode === 1){
       currentIndex = 0
@@ -2322,7 +2358,6 @@ function next(){
     }
     return
   }
-  
   playIndex(currentIndex)
 }
 
@@ -2357,6 +2392,11 @@ function bindMediaEvents(media){
     try{ updateMediaSessionState() }catch(_){ }
   })
   media.addEventListener('ended',()=>{
+    if(getMedia() !== media) return
+    if(currentIndex < 0 || currentIndex >= queue.length) return
+    const item = queue[currentIndex]
+    const expectedUrl = fileURL(item.localPath)
+    if((media.src || '').replace(/\/+$/, '') !== expectedUrl.replace(/\/+$/, '')) return
     if(repeatMode === 2){
       const m = getMedia()
       if(m){
@@ -2672,11 +2712,19 @@ function init(){
       this.msg.innerHTML = ''
       if(typeof opts.message === 'string'){ this.msg.textContent = opts.message }
       else if(opts.message instanceof Node){ this.msg.appendChild(opts.message) }
-      this.cancel.textContent = opts.cancelText || 'Cancel'
-      this.confirm.textContent = opts.confirmText || 'Confirm'
+      const actionsEl = this.cancel && this.cancel.parentElement
+      if(opts.hideButtons && actionsEl){
+        actionsEl.style.display = 'none'
+        this.overlay.onclick = (e)=>{ if(e.target === this.overlay){ this.overlay.style.display='none'; this.overlay.onclick=null; opts.onConfirm && opts.onConfirm() } }
+      } else {
+        if(actionsEl) actionsEl.style.display = ''
+        this.overlay.onclick = null
+        this.cancel.textContent = opts.cancelText || 'Cancel'
+        this.confirm.textContent = opts.confirmText || 'Confirm'
+        this.cancel.onclick = ()=>{ this.overlay.style.display='none'; opts.onCancel && opts.onCancel() }
+        this.confirm.onclick = ()=>{ this.overlay.style.display='none'; opts.onConfirm && opts.onConfirm() }
+      }
       this.overlay.style.display = 'flex'
-      this.cancel.onclick = ()=>{ this.overlay.style.display='none'; opts.onCancel && opts.onCancel() }
-      this.confirm.onclick = ()=>{ this.overlay.style.display='none'; opts.onConfirm && opts.onConfirm() }
     }
   }
   const queueBtn = document.getElementById('queueBtn')
@@ -3390,9 +3438,51 @@ function openContextMenu(x, y, item, list, playlistIndex){
       else if(inDetailView) renderPlaylistDetail(playlistIndex)
     }
   }
+  const trackerBtn = document.createElement('button'); trackerBtn.textContent = 'Tracker Info'
+  trackerBtn.onclick = async ()=>{
+    hideContextMenu()
+    const path = item.path || item.localPath || ''
+    if(!path){ modal.open({ title: 'Tracker Info', message: 'No path for this item.', confirmText: 'OK' }); return }
+    let song = null
+    try{ song = await window.electronAPI.getTrackerInfoByPath(path) }catch(_){}
+    if(!song){
+      modal.open({ title: 'Tracker Info', message: 'No tracker info found for this path.', confirmText: 'OK' })
+      return
+    }
+    const eraRaw = song.era && typeof song.era === 'object' ? song.era.name : (song.era != null ? String(song.era) : '')
+    const era = (eraRaw && ERA_DISPLAY_NAMES[eraRaw]) ? ERA_DISPLAY_NAMES[eraRaw] : eraRaw
+    const lines = [
+      ['Name', song.name],
+      ['Path', song.path],
+      ['Category', song.category],
+      ['Era', era],
+      ['Credited Artists', song.credited_artists],
+      ['Producers', song.producers],
+      ['Engineers', song.engineers],
+      ['Length', song.length],
+      ['Bitrate', song.bitrate],
+      ['Leak Type', song.leak_type],
+      ['Date Leaked', song.date_leaked],
+      ['Record Dates', song.record_dates],
+      ['Recording Locations', song.recording_locations]
+    ]
+    const div = document.createElement('div'); div.className = 'tracker-info-modal'
+    div.style.cssText = 'max-height: 70vh; overflow-y: auto; font-size: 0.9rem;'
+    const table = document.createElement('table'); table.style.cssText = 'width: 100%; border-collapse: collapse;'
+    lines.forEach(([label, value]) => {
+      if(value == null || value === '') return
+      const tr = document.createElement('tr')
+      const th = document.createElement('th'); th.textContent = label; th.style.cssText = 'text-align: left; padding: 6px 8px 6px 0; vertical-align: top; font-weight: 600;'
+      const td = document.createElement('td'); td.textContent = String(value).replace(/\r\n/g, '\n').trim(); td.style.cssText = 'padding: 6px 0; word-break: break-word;'
+      tr.appendChild(th); tr.appendChild(td); table.appendChild(tr)
+    })
+    div.appendChild(table)
+    modal.open({ title: 'Tracker Info', message: div, hideButtons: true })
+  }
   contextMenuEl.appendChild(addNext); contextMenuEl.appendChild(addEnd)
   contextMenuEl.appendChild(favBtn)
   contextMenuEl.appendChild(addToPlaylist)
+  contextMenuEl.appendChild(trackerBtn)
   if(removeFromPlaylistBtn) contextMenuEl.appendChild(removeFromPlaylistBtn)
   contextMenuEl.style.left = x+'px'
   contextMenuEl.style.top = y+'px'

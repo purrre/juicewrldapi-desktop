@@ -1137,7 +1137,8 @@ function applyStartupSettings() {
       customStoragePath: undefined,
       lastActiveTab: 'overview',
       discordRpcEnabled: true,
-      discordRpcClientId: '1401436107765452860'
+      discordRpcClientId: '1401436107765452860',
+      darkModeMain: false
     });
     
     console.log('[Settings] Applying startup settings:', settings);
@@ -1223,6 +1224,94 @@ function applyStartupSettings() {
   }
 }
 
+function fetchGitHubLatestRelease() {
+  return new Promise((resolve, reject) => {
+    const options = {
+      hostname: 'api.github.com',
+      path: '/repos/HackinHood/juicewrldapi-desktop/releases/latest',
+      headers: { 'User-Agent': 'JuiceWRLD-API-Desktop/' + (app.getVersion() || '0.0.0') }
+    }
+    https.get(options, (res) => {
+      if (res.statusCode === 302 || res.statusCode === 301) {
+        const loc = res.headers.location
+        if (loc) {
+          https.get(loc, { headers: options.headers }, (r2) => {
+            let body = ''
+            r2.on('data', (c) => { body += c })
+            r2.on('end', () => { try { resolve(JSON.parse(body)) } catch (e) { reject(e) } })
+          }).on('error', reject)
+          return
+        }
+      }
+      if (res.statusCode !== 200) {
+        reject(new Error('GitHub API returned ' + res.statusCode))
+        res.resume()
+        return
+      }
+      let body = ''
+      res.on('data', (c) => { body += c })
+      res.on('end', () => { try { resolve(JSON.parse(body)) } catch (e) { reject(e) } })
+    }).on('error', reject)
+  })
+}
+
+function isNewerVersion(latest, current) {
+  const a = latest.split('.').map(Number)
+  const b = current.split('.').map(Number)
+  for (let i = 0; i < Math.max(a.length, b.length); i++) {
+    const av = a[i] || 0
+    const bv = b[i] || 0
+    if (av > bv) return true
+    if (av < bv) return false
+  }
+  return false
+}
+
+function pickPlatformAsset(assets) {
+  const platform = process.platform
+  const arch = process.arch
+  if (platform === 'win32') {
+    return assets.find(a => a.name.endsWith('.exe') && a.name.includes('x64'))
+  } else if (platform === 'darwin') {
+    const target = arch === 'arm64' ? 'arm64' : 'x64'
+    return assets.find(a => a.name.endsWith('.dmg') && a.name.includes(target))
+  } else {
+    return assets.find(a => a.name.endsWith('.AppImage'))
+  }
+}
+
+function downloadFileWithProgress(url, destPath, onProgress) {
+  return new Promise((resolve, reject) => {
+    const follow = (u) => {
+      const mod = u.startsWith('https') ? https : http
+      mod.get(u, { headers: { 'User-Agent': 'JuiceWRLD-API-Desktop' } }, (res) => {
+        if (res.statusCode === 302 || res.statusCode === 301) {
+          const loc = res.headers.location
+          if (loc) { follow(loc); return }
+        }
+        if (res.statusCode !== 200) {
+          reject(new Error('Download failed with status ' + res.statusCode))
+          res.resume()
+          return
+        }
+        const totalBytes = parseInt(res.headers['content-length'], 10) || 0
+        let downloaded = 0
+        const file = fs.createWriteStream(destPath)
+        res.on('data', (chunk) => {
+          downloaded += chunk.length
+          if (totalBytes > 0 && onProgress) {
+            onProgress({ percent: Math.round((downloaded / totalBytes) * 100), downloaded, total: totalBytes })
+          }
+        })
+        res.pipe(file)
+        file.on('finish', () => { file.close(resolve) })
+        file.on('error', (err) => { fs.unlink(destPath, () => {}); reject(err) })
+      }).on('error', reject)
+    }
+    follow(url)
+  })
+}
+
 app.whenReady().then(() => {
   if (process.platform === 'win32') {
     app.setAppUserModelId('com.juicewrldapi.desktop');
@@ -1262,7 +1351,83 @@ app.whenReady().then(() => {
   ipcMain.handle('get-active-transfers', () => {
     try { return Array.from(activeTransfers.values()) } catch (_) { return [] }
   })
-  
+
+  ipcMain.handle('check-for-app-update', async () => {
+    try {
+      const currentVersion = app.getVersion()
+      const releaseData = await fetchGitHubLatestRelease()
+      if (!releaseData || !releaseData.tag_name) {
+        return { updateAvailable: false, currentVersion, error: 'Could not fetch release info' }
+      }
+      const latestVersion = releaseData.tag_name.replace(/^v/, '')
+      const updateAvailable = isNewerVersion(latestVersion, currentVersion)
+      let downloadUrl = null
+      let fileName = null
+      if (updateAvailable && Array.isArray(releaseData.assets)) {
+        const asset = pickPlatformAsset(releaseData.assets)
+        if (asset) {
+          downloadUrl = asset.browser_download_url
+          fileName = asset.name
+        }
+      }
+      return {
+        updateAvailable,
+        latestVersion,
+        currentVersion,
+        downloadUrl,
+        fileName,
+        releaseNotes: releaseData.body || ''
+      }
+    } catch (err) {
+      console.error('[AutoUpdate] check failed:', err.message)
+      return { updateAvailable: false, error: err.message }
+    }
+  })
+
+  ipcMain.handle('download-and-install-update', async (event, info) => {
+    try {
+      if (!info || !info.downloadUrl || !info.fileName) {
+        return { success: false, error: 'Missing download info' }
+      }
+      const tempDir = app.getPath('temp')
+      const installerPath = path.join(tempDir, info.fileName)
+      await downloadFileWithProgress(info.downloadUrl, installerPath, (progress) => {
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send('update-download-progress', progress)
+        }
+      })
+      if (process.platform === 'win32') {
+        const batPath = path.join(tempDir, 'juicewrld-update.cmd')
+        const exePath = process.execPath
+        const batContent = [
+          '@echo off',
+          'ping 127.0.0.1 -n 4 > nul',
+          `start "" /wait "${installerPath}" /S`,
+          `start "" "${exePath}"`,
+          `del "%~f0"`
+        ].join('\r\n')
+        fs.writeFileSync(batPath, batContent, 'utf8')
+        const { spawn } = require('child_process')
+        const child = spawn('cmd.exe', ['/c', batPath], {
+          detached: true,
+          stdio: 'ignore',
+          windowsHide: true
+        })
+        child.unref()
+        setTimeout(() => { app.quit() }, 500)
+        return { success: true }
+      } else {
+        const { shell } = require('electron')
+        await shell.openPath(installerPath)
+        setTimeout(() => { app.quit() }, 1000)
+        return { success: true }
+      }
+    } catch (err) {
+      console.error('[AutoUpdate] download/install failed:', err.message)
+      return { success: false, error: err.message }
+    }
+  })
+
   const iconPath = getIconPath();
   if (iconPath) {
     app.setAppUserModelId('com.juicewrldapi.desktop');
@@ -1307,6 +1472,18 @@ ipcMain.handle('open-player-mode', () => {
     if (mainWindow) {
       try { ensureSyncWindow() } catch (_) {}
       mainWindow.loadFile('player.html');
+      return true;
+    }
+    return false;
+  } catch (_) {
+    return false;
+  }
+});
+
+ipcMain.handle('open-tracker-mode', () => {
+  try {
+    if (mainWindow) {
+      mainWindow.loadFile('tracker.html');
       return true;
     }
     return false;
@@ -1377,6 +1554,86 @@ ipcMain.handle('clear-playback-state', () => {
     return { success: false };
   }
 });
+let songsTrackerIndex = null;
+
+function fetchJsonByUrl(urlStr) {
+  return new Promise((resolve, reject) => {
+    try {
+      const url = new URL(urlStr);
+      if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+        reject(new Error('Unsupported protocol'));
+        return;
+      }
+      const isHttps = url.protocol === 'https:';
+      const lib = isHttps ? https : http;
+      const options = {
+        hostname: url.hostname,
+        port: url.port || (isHttps ? 443 : 80),
+        path: url.pathname + url.search,
+        method: 'GET',
+        headers: { 'Accept': 'application/json' },
+        timeout: 30000
+      };
+      const req = lib.request(options, (res) => {
+        let data = '';
+        res.on('data', (chunk) => { data += chunk; });
+        res.on('end', () => {
+          if (res.statusCode < 200 || res.statusCode >= 300) {
+            reject(new Error(`HTTP ${res.statusCode}`));
+            return;
+          }
+          const trimmed = (data && typeof data === 'string') ? data.trim() : '';
+          if (trimmed.startsWith('<')) {
+            reject(new Error('Response is HTML, not JSON'));
+            return;
+          }
+          try {
+            resolve(JSON.parse(data));
+          } catch (e) {
+            reject(e);
+          }
+        });
+      });
+      req.on('error', reject);
+      req.setTimeout(30000, () => { try { req.destroy(); } catch (_) {} reject(new Error('Timeout')); });
+      req.end();
+    } catch (e) {
+      reject(e);
+    }
+  });
+}
+
+const TRACKER_API_BASE = 'https://juicewrldapi.com';
+const TRACKER_INDEX_TTL_MS = 60 * 60 * 1000;
+
+async function loadSongsTrackerIndex() {
+  const lastFetched = store.get('songsTrackerIndexLastFetched', 0);
+  if (Date.now() - lastFetched < TRACKER_INDEX_TTL_MS) {
+    const cached = store.get('songsTrackerIndexCache', null);
+    if (Array.isArray(cached) && cached.length > 0) {
+      songsTrackerIndex = cached;
+      return cached;
+    }
+  }
+  const base = TRACKER_API_BASE.replace(/\/$/, '');
+  const all = [];
+  let nextUrl = `${base}/juicewrld/songs/?page=1`;
+  while (nextUrl) {
+    const data = await fetchJsonByUrl(nextUrl);
+    const results = Array.isArray(data.results) ? data.results : [];
+    all.push(...results);
+    nextUrl = data.next && typeof data.next === 'string' ? data.next : null;
+  }
+  songsTrackerIndex = all;
+  store.set('songsTrackerIndexLastFetched', Date.now());
+  store.set('songsTrackerIndexCache', all);
+  return all;
+}
+
+function normalizePath(p) {
+  return String(p || '').replace(/\\/g, '/').trim();
+}
+
 ipcMain.handle('get-settings', () => {
   return store.get('settings', {
     startWithWindows: false,
@@ -1399,6 +1656,19 @@ ipcMain.handle('get-settings', () => {
   });
 });
 
+ipcMain.handle('get-tracker-info-by-path', async (event, filePath) => {
+  try {
+    if (!songsTrackerIndex) await loadSongsTrackerIndex();
+    const norm = normalizePath(filePath);
+    if (!norm) return null;
+    const song = songsTrackerIndex.find((s) => normalizePath(s.path) === norm);
+    return song || null;
+  } catch (e) {
+    console.error('[Tracker] get-tracker-info-by-path failed:', e);
+    return null;
+  }
+});
+
 ipcMain.handle('save-settings', (event, settings) => {
   const existingSettings = store.get('settings', {});
   const validatedSettings = {
@@ -1419,6 +1689,7 @@ ipcMain.handle('save-settings', (event, settings) => {
     lastActiveTab: ['overview', 'local-files', 'server-files', 'sync', 'settings', 'account'].includes(settings.lastActiveTab) ? settings.lastActiveTab : 'overview',
     crossfadeEnabled: Boolean(settings.crossfadeEnabled),
     crossfadeDuration: Math.max(1, Math.min(10, parseInt(settings.crossfadeDuration) || 5)),
+    darkModeMain: Boolean(settings.darkModeMain),
     authData: settings.authData && typeof settings.authData === 'object' ? settings.authData : undefined
   };
 

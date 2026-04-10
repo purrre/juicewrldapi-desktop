@@ -8,6 +8,7 @@
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
 </head>
 <body>
+    <script>try{if(localStorage.getItem('darkModeMain')==='1'){document.body.classList.add('dark-mode-main')}}catch(e){}</script>
     <div class="titlebar">
         <div class="titlebar-drag"></div>
         <div class="titlebar-center">
@@ -31,6 +32,10 @@
                     <h1>JuiceWRLD API</h1>
                 </div>
                 <div class="header-actions">
+                    <button class="btn btn-update no-update" id="updateBtn">
+                        <i class="fas fa-arrow-circle-down" id="updateBtnIcon"></i>
+                        <span id="updateBtnText">v0.0.5</span>
+                    </button>
                     <button class="btn btn-primary" id="syncBtn">
                         <i class="fas fa-sync-alt"></i>
                         Start Sync
@@ -38,6 +43,10 @@
                     <button class="btn btn-secondary" id="playerModeBtn" onclick="window.electronAPI.openPlayerMode()">
                         <i class="fas fa-music"></i>
                         Player
+                    </button>
+                    <button class="btn btn-secondary" id="trackerModeBtn" onclick="window.electronAPI.openTrackerMode()">
+                        <i class="fas fa-database"></i>
+                        Tracker
                     </button>
                 </div>
             </div>
@@ -214,9 +223,6 @@
                             <button id="clearLocalStorageBtn" class="btn btn-danger">
                                 <i class="fas fa-trash"></i> Clear All
                             </button>
-                            <button id="testLocalFilesBtn" class="btn btn-warning" onclick="testLocalFilesAPI()">
-                                <i class="fas fa-bug"></i> Test API
-                            </button>
                         </div>
                     </div>
                     
@@ -344,6 +350,12 @@
                                 <label class="setting-label">
                                     <input type="checkbox" id="showTrayNotifications">
                                     Show Tray Notifications
+                                </label>
+                            </div>
+                            <div class="setting-item">
+                                <label class="setting-label">
+                                    <input type="checkbox" id="darkModeMain">
+                                    Dark mode (main area)
                                 </label>
                             </div>
                         </div>

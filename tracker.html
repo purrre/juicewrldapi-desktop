@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Tracker - JuiceWRLD API</title>
+    <link rel="stylesheet" href="tracker.css">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+</head>
+<body>
+    <div class="tracker-app">
+        <div class="titlebar">
+            <div class="titlebar-drag"></div>
+            <div class="titlebar-center">
+                <img src="assets/icon_32x32.png" alt="" style="width:16px;height:16px; -webkit-app-region: no-drag;">
+                <span class="titlebar-title" style="-webkit-app-region: no-drag;">Tracker - JuiceWRLD API</span>
+            </div>
+            <div class="titlebar-right">
+                <div class="titlebar-drag"></div>
+                <div class="titlebar-controls">
+                    <button id="tbMin" class="tb-btn" title="Minimize">—</button>
+                    <button id="tbMax" class="tb-btn" title="Maximize">▢</button>
+                    <button id="tbClose" class="tb-btn close" title="Close">✕</button>
+                </div>
+            </div>
+        </div>
+
+        <div class="tracker-body">
+            <header class="tracker-topbar">
+                <button id="backToApp" class="topbar-btn" title="Back to App">
+                    <i class="fas fa-arrow-left"></i>
+                    <span>Back</span>
+                </button>
+                <div class="topbar-title">Juice WRLD Tracker</div>
+                <div class="topbar-spacer"></div>
+            </header>
+
+            <div class="hero-section">
+                <div class="hero-overlay">
+                    <div class="hero-content">
+                        <h1 id="heroTitle" class="hero-title">The Juice WRLD API</h1>
+                        <p id="heroSubtitle" class="hero-subtitle">Loading...</p>
+                        <span id="dataSourceChip" class="data-source-chip">
+                            <i class="fas fa-cloud"></i>
+                            Data Source: Checking...
+                        </span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="filters-section">
+                <div class="filters-row">
+                    <div class="filter-group">
+                        <label for="categoryFilter">Category</label>
+                        <select id="categoryFilter">
+                            <option value="">All Categories</option>
+                        </select>
+                    </div>
+                    <div class="filter-group">
+                        <label for="eraFilter">Era</label>
+                        <select id="eraFilter">
+                            <option value="">All Eras</option>
+                        </select>
+                    </div>
+                    <div class="filter-group search-group">
+                        <label for="searchInput">Search</label>
+                        <div class="search-wrapper">
+                            <i class="fas fa-search"></i>
+                            <input id="searchInput" type="text" placeholder="Search songs...">
+                        </div>
+                    </div>
+                    <button id="refreshBtn" class="refresh-btn" title="Refresh API">
+                        <i class="fas fa-sync-alt"></i>
+                        <span>Refresh</span>
+                    </button>
+                </div>
+            </div>
+
+            <div class="stats-section" id="statsSection"></div>
+
+            <div class="cards-grid" id="cardsGrid"></div>
+
+            <div id="loadingSpinner" class="loading-indicator" style="display:none;">
+                <div class="spinner"></div>
+            </div>
+
+            <div id="endOfResults" class="end-indicator" style="display:none;">
+                End of results
+            </div>
+        </div>
+    </div>
+
+    <div id="lyricsModal" class="modal-overlay" style="display:none;">
+        <div class="modal-card">
+            <div class="modal-header">
+                <h4 id="lyricsModalTitle">Song Name</h4>
+                <button id="lyricsModalClose" class="modal-close-btn"><i class="fas fa-times"></i></button>
+            </div>
+            <div class="modal-divider"></div>
+            <div class="modal-body">
+                <pre id="lyricsModalText" class="lyrics-text"></pre>
+            </div>
+        </div>
+    </div>
+
+    <script src="tracker.js"></script>
+</body>
+</html>

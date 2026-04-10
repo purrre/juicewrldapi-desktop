@@ -70,6 +70,8 @@ const elements = {
     tabBtns: document.querySelectorAll('.tab-btn'),
     tabPanes: document.querySelectorAll('.tab-pane'),
     
+    updateBtn: document.getElementById('updateBtn'),
+    updateBtnText: document.getElementById('updateBtnText'),
     syncBtn: document.getElementById('syncBtn'),
     syncStatus: document.getElementById('syncStatus'),
     progressContainer: document.getElementById('progressContainer'),
@@ -109,6 +111,7 @@ const elements = {
             startWithWindows: document.getElementById('startWithWindows'),
         minimizeToTray: document.getElementById('minimizeToTray'),
                 showTrayNotifications: document.getElementById('showTrayNotifications'),
+        darkModeMain: document.getElementById('darkModeMain'),
         autoSyncEnabled: document.getElementById('autoSyncEnabled'),
         autoSyncInterval: document.getElementById('autoSyncInterval'),
     maxTransfers: document.getElementById('maxTransfers'),
@@ -459,6 +462,9 @@ function setupEventListeners() {
         elements.startWithWindows.addEventListener('change', markDirty);
         elements.minimizeToTray.addEventListener('change', markDirty);
         elements.showTrayNotifications.addEventListener('change', markDirty);
+        if (elements.darkModeMain) {
+            elements.darkModeMain.addEventListener('change', () => { markDirty(); applyDarkModeMain(elements.darkModeMain.checked); });
+        }
         elements.autoSyncEnabled.addEventListener('change', markDirty);
         elements.autoSyncInterval.addEventListener('change', markDirty);
         elements.maxTransfers.addEventListener('change', markDirty);
@@ -491,8 +497,20 @@ function setupEventListeners() {
     elements.refreshFoldersBtn.addEventListener('click', refreshAvailableFolders);
     elements.selectAllFoldersBtn.addEventListener('click', selectAllFolders);
     elements.deselectAllFoldersBtn.addEventListener('click', deselectAllFolders);
-    
 
+    if (elements.updateBtn) {
+        elements.updateBtn.addEventListener('click', handleAppUpdate);
+    }
+    checkForAppUpdateOnStartup();
+    setInterval(checkForAppUpdateOnStartup, 30 * 60 * 1000);
+
+}
+
+function applyDarkModeMain(enabled) {
+    const container = document.querySelector('.app-container');
+    if (container) container.classList.toggle('dark-mode-main', !!enabled);
+    document.body.classList.toggle('dark-mode-main', !!enabled);
+    try { localStorage.setItem('darkModeMain', enabled ? '1' : '0'); } catch (_) {}
 }
 
 function updateUnsavedBadge() {
@@ -501,6 +519,148 @@ function updateUnsavedBadge() {
             elements.unsavedBadge.style.display = settingsDirty ? 'inline-flex' : 'none';
         }
     } catch (_) {}
+}
+
+let pendingUpdateInfo = null;
+let versionDialogOpen = false;
+
+async function checkForAppUpdateOnStartup() {
+    try {
+        const result = await window.electronAPI.checkForAppUpdate();
+        if (!result) return;
+        if (result.updateAvailable && result.downloadUrl) {
+            pendingUpdateInfo = result;
+            if (elements.updateBtn) {
+                elements.updateBtn.classList.remove('no-update');
+                elements.updateBtn.classList.add('has-update');
+                if (elements.updateBtnText) {
+                    elements.updateBtnText.textContent = 'Update v' + result.latestVersion;
+                }
+            }
+        } else {
+            pendingUpdateInfo = result;
+            if (elements.updateBtn) {
+                elements.updateBtn.classList.remove('has-update');
+                elements.updateBtn.classList.add('no-update');
+                if (elements.updateBtnText) {
+                    elements.updateBtnText.textContent = 'v' + (result.currentVersion || '0.0.5');
+                }
+            }
+        }
+    } catch (_) {}
+}
+
+function handleAppUpdate() {
+    if (versionDialogOpen) return;
+    showVersionDialog();
+}
+
+function showVersionDialog() {
+    versionDialogOpen = true;
+    const info = pendingUpdateInfo || {};
+    const currentV = info.currentVersion || '0.0.5';
+    const latestV = info.latestVersion || currentV;
+    const hasUpdate = !!(info.updateAvailable && info.downloadUrl);
+
+    const overlay = document.createElement('div');
+    overlay.className = 'version-dialog-overlay';
+
+    const statusText = hasUpdate
+        ? '<i class="fas fa-arrow-circle-up"></i> A new version is available!'
+        : '<i class="fas fa-check-circle"></i> You\'re up to date';
+
+    overlay.innerHTML = `
+        <div class="version-dialog">
+            <div class="version-dialog-header">
+                <h3><i class="fas fa-info-circle"></i> Version Info</h3>
+                <button class="version-dialog-close" id="vdClose"><i class="fas fa-times"></i></button>
+            </div>
+            <div class="version-dialog-body">
+                <div class="version-row">
+                    <span class="version-row-label">Installed Version</span>
+                    <span class="version-row-value">v${currentV}</span>
+                </div>
+                <div class="version-row">
+                    <span class="version-row-label">Latest Version</span>
+                    <span class="version-row-value ${hasUpdate ? 'update-available' : 'up-to-date'}">v${latestV}</span>
+                </div>
+                <div class="version-status ${hasUpdate ? 'has-update' : ''}">${statusText}</div>
+            </div>
+            <div class="version-dialog-footer" id="vdFooter">
+                <button class="btn btn-secondary" id="vdCloseBtn">Close</button>
+                ${hasUpdate ? '<button class="btn btn-primary" id="vdUpdateBtn"><i class="fas fa-download"></i> Download &amp; Install</button>' : ''}
+            </div>
+        </div>
+    `;
+
+    document.body.appendChild(overlay);
+
+    const closeDialog = () => {
+        overlay.style.opacity = '0';
+        overlay.style.transition = 'opacity 0.15s ease';
+        setTimeout(() => { overlay.remove(); versionDialogOpen = false; }, 150);
+    };
+
+    overlay.querySelector('#vdClose').addEventListener('click', closeDialog);
+    overlay.querySelector('#vdCloseBtn').addEventListener('click', closeDialog);
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) closeDialog(); });
+
+    const updateBtn = overlay.querySelector('#vdUpdateBtn');
+    if (updateBtn && hasUpdate) {
+        updateBtn.addEventListener('click', () => {
+            closeDialog();
+            startUpdateDownload();
+        });
+    }
+}
+
+function startUpdateDownload() {
+    if (!pendingUpdateInfo || !pendingUpdateInfo.downloadUrl) return;
+    const btn = elements.updateBtn;
+    if (!btn) return;
+
+    btn.classList.remove('no-update', 'has-update');
+    btn.classList.add('downloading');
+    btn.style.setProperty('--update-progress', '0%');
+    if (elements.updateBtnText) {
+        elements.updateBtnText.textContent = 'Downloading... 0%';
+    }
+
+    window.electronAPI.onUpdateDownloadProgress((data) => {
+        const pct = data.percent || 0;
+        btn.style.setProperty('--update-progress', pct + '%');
+        if (elements.updateBtnText) {
+            elements.updateBtnText.textContent = 'Downloading... ' + pct + '%';
+        }
+    });
+
+    window.electronAPI.downloadAndInstallUpdate({
+        downloadUrl: pendingUpdateInfo.downloadUrl,
+        fileName: pendingUpdateInfo.fileName
+    }).then((result) => {
+        if (result && result.success) {
+            if (elements.updateBtnText) {
+                elements.updateBtnText.textContent = 'Installing...';
+            }
+        } else {
+            btn.classList.remove('downloading');
+            btn.classList.add('has-update');
+            if (elements.updateBtnText) {
+                elements.updateBtnText.textContent = 'Update failed';
+            }
+            setTimeout(() => {
+                if (elements.updateBtnText && pendingUpdateInfo) {
+                    elements.updateBtnText.textContent = 'Update v' + pendingUpdateInfo.latestVersion;
+                }
+            }, 3000);
+        }
+    }).catch(() => {
+        btn.classList.remove('downloading');
+        btn.classList.add('has-update');
+        if (elements.updateBtnText) {
+            elements.updateBtnText.textContent = 'Retry update';
+        }
+    });
 }
 
 function setupMenuListeners() {
@@ -1196,7 +1356,7 @@ function displayFiles(files) {
     }
     
     const downloadAllButton = `
-        <div style="margin-bottom: 1rem; padding: 1rem; background: #f8f9fa; border-radius: 8px; border: 1px solid #e9ecef;">
+        <div class="download-all-banner" style="margin-bottom: 1rem; padding: 1rem; background: #f8f9fa; border-radius: 8px; border: 1px solid #e9ecef;">
             <div style="display: flex; justify-content: space-between; align-items: center;">
                 <div>
                     <strong>📁 ${files.length} Files Available</strong>
@@ -2146,6 +2306,10 @@ async function loadSettings() {
         elements.startWithWindows.checked = currentSettings.startWithWindows;
         elements.minimizeToTray.checked = currentSettings.minimizeToTray;
         elements.showTrayNotifications.checked = currentSettings.showTrayNotifications;
+        if (elements.darkModeMain) {
+            elements.darkModeMain.checked = !!currentSettings.darkModeMain;
+            applyDarkModeMain(!!currentSettings.darkModeMain);
+        }
         elements.autoSyncEnabled.checked = currentSettings.autoSyncEnabled;
         elements.autoSyncInterval.value = currentSettings.autoSyncInterval;
         
@@ -2517,6 +2681,7 @@ async function saveSettings() {
             startWithWindows: elements.startWithWindows.checked,
             minimizeToTray: elements.minimizeToTray.checked,
             showTrayNotifications: elements.showTrayNotifications.checked,
+            darkModeMain: elements.darkModeMain ? elements.darkModeMain.checked : false,
             autoSyncEnabled: elements.autoSyncEnabled.checked,
             autoSyncInterval: parseInt(elements.autoSyncInterval.value),
             maxTransfers: parseInt(elements.maxTransfers.value),
@@ -2551,6 +2716,10 @@ async function resetSettings() {
         elements.startWithWindows.checked = false;
         elements.minimizeToTray.checked = false;
         elements.showTrayNotifications.checked = true;
+        if (elements.darkModeMain) {
+            elements.darkModeMain.checked = false;
+            applyDarkModeMain(false);
+        }
         elements.autoSyncEnabled.checked = true;
         elements.autoSyncInterval.value = '30';
         elements.maxTransfers.value = '3';
@@ -2572,6 +2741,7 @@ async function resetSettings() {
             startWithWindows: false,
             minimizeToTray: false,
             showTrayNotifications: true,
+            darkModeMain: false,
             autoSyncEnabled: true,
             autoSyncInterval: 30,
             maxTransfers: 3,
@@ -2808,51 +2978,6 @@ function closeDownloadProgress() {
 setInterval(updateLastUpdate, 30000);
 
 setInterval(updateStats, 60000);
-
-async function testLocalFilesAPI() {
-    try {
-        console.log('[Test] Testing getLocalFiles API...');
-        
-        const response = await window.electronAPI.getLocalFiles();
-        console.log('[Test] Raw response:', response);
-        
-        if (response.error) {
-            console.error('[Test] API returned error:', response.error);
-            return;
-        }
-        
-        const files = response.files || [];
-        console.log('[Test] Files array length:', files.length);
-        
-        if (files.length > 0) {
-            console.log('[Test] First file structure:', files[0]);
-            console.log('[Test] File properties:', Object.keys(files[0]));
-            
-            const hasFilepath = files.some(f => f.filepath);
-            const hasPath = files.some(f => f.path);
-            const hasFilename = files.some(f => f.filename);
-            
-            console.log('[Test] Has filepath property:', hasFilepath);
-            console.log('[Test] Has path property:', hasPath);
-            console.log('[Test] Has filename property:', hasFilename);
-        } else {
-            console.log('[Test] No files returned');
-        }
-        
-        if (files.length > 0) {
-            const sampleFile = files[0];
-            const filepath = sampleFile.filepath || sampleFile.path;
-            if (filepath) {
-                console.log('[Test] Testing getLocalFilePath for:', filepath);
-                const localPath = await window.electronAPI.getLocalFilePath(filepath);
-                console.log('[Test] Local path result:', localPath);
-            }
-        }
-        
-    } catch (error) {
-        console.error('[Test] Error testing API:', error);
-    }
-}
 
 async function downloadAllFiles() {
     try {
@@ -3254,6 +3379,7 @@ async function startSyncOptimized() {
     try {
         const progressContainer = document.createElement('div');
         progressContainer.id = 'download-progress';
+        progressContainer.className = 'download-progress-modal';
         progressContainer.style.cssText = `
             position: fixed; top: 20px; right: 20px; width: 400px; 
             background: white; border: 1px solid #ddd; border-radius: 8px; 
@@ -3264,7 +3390,7 @@ async function startSyncOptimized() {
                 <h4 style="margin: 0; color: #333;">Download Progress</h4>
                 <button id="cancel-download" style="background: #ff4444; color: white; border: none; padding: 4px 8px; border-radius: 4px; cursor: pointer;">Cancel</button>
             </div>
-            <div style="background: #f0f0f0; height: 8px; border-radius: 4px; overflow: hidden; margin-bottom: 8px;">
+            <div class="download-progress-track" style="background: #f0f0f0; height: 8px; border-radius: 4px; overflow: hidden; margin-bottom: 8px;">
                 <div id="download-progress-fill" style="background: #4CAF50; height: 100%; width: 0%; transition: width 0.3s ease;"></div>
             </div>
             <div id="download-progress-text" style="font-size: 14px; color: #666;">Starting sync...</div>

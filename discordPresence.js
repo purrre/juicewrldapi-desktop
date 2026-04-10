@@ -6,11 +6,107 @@ const state = {
   applicationId: null,
   connected: false,
   lastActivity: null,
+  lastActivityString: null,
   enabled: true,
   reconnectTimer: null,
   retryDelayMs: 5000,
   lastErrorMessage: null,
-  setActivityPromise: Promise.resolve()
+  setActivityPromise: Promise.resolve(),
+  lastSetActivityAtMs: 0,
+  minUpdateIntervalMs: 1500
+}
+
+function sleep(ms){
+  return new Promise((resolve)=> setTimeout(resolve, Math.max(0, ms||0)))
+}
+
+function clampString(v, maxLen){
+  if(v === undefined || v === null) return undefined
+  const s = String(v)
+  if(!s) return undefined
+  return s.length > maxLen ? s.slice(0, maxLen) : s
+}
+
+function sanitizeActivity(activity){
+  if(!activity || typeof activity !== 'object') return null
+  const clean = {}
+  const details = clampString(activity.details, 128)
+  const stateText = clampString(activity.state, 128)
+  if(details) clean.details = details
+  if(stateText) clean.state = stateText
+  clean.instance = !!activity.instance
+  clean.type = (typeof activity.type === 'number') ? activity.type : 0
+
+  const startTimestamp = activity.startTimestamp
+  const endTimestamp = activity.endTimestamp
+  if(typeof startTimestamp === 'number' || typeof endTimestamp === 'number'){
+    clean.startTimestamp = (typeof startTimestamp === 'number' && Number.isFinite(startTimestamp)) ? startTimestamp : undefined
+    clean.endTimestamp = (typeof endTimestamp === 'number' && Number.isFinite(endTimestamp)) ? endTimestamp : undefined
+    if(clean.startTimestamp === undefined) delete clean.startTimestamp
+    if(clean.endTimestamp === undefined) delete clean.endTimestamp
+  }
+
+  const badImageKey = (k)=>{
+    if(!k) return true
+    const s = String(k)
+    if(!s) return true
+    if(s.length > 256) return true
+    const lower = s.toLowerCase()
+    if(lower.startsWith('https://') || lower.startsWith('http://')) return false
+    return false
+  }
+  const largeImageKey = activity.largeImageKey
+  const smallImageKey = activity.smallImageKey
+  if(!badImageKey(largeImageKey)) clean.largeImageKey = String(largeImageKey)
+  if(!badImageKey(smallImageKey)) clean.smallImageKey = String(smallImageKey)
+  const largeImageText = clampString(activity.largeImageText, 128)
+  const smallImageText = clampString(activity.smallImageText, 128)
+  if(largeImageText) clean.largeImageText = largeImageText
+  if(smallImageText) clean.smallImageText = smallImageText
+
+  if(Array.isArray(activity.buttons)){
+    const buttons = activity.buttons
+      .map((b)=>{
+        if(!b || typeof b !== 'object') return null
+        const label = clampString(b.label, 32)
+        const url = clampString(b.url, 512)
+        if(!label || !url) return null
+        if(!(url.startsWith('https://') || url.startsWith('http://'))) return null
+        return { label, url }
+      })
+      .filter(Boolean)
+      .slice(0, 2)
+    if(buttons.length) clean.buttons = buttons
+  }
+
+  return clean
+}
+
+function queueSetActivity(activity){
+  if(!state.client || !state.connected) return Promise.resolve(false)
+  const clean = sanitizeActivity(activity)
+  if(!clean) return Promise.resolve(false)
+  const s = JSON.stringify(clean)
+  if(state.lastActivityString && state.lastActivityString === s) return Promise.resolve(true)
+  state.lastActivityString = s
+  const doSet = async ()=>{
+    const now = Date.now()
+    const waitMs = (state.lastSetActivityAtMs + (state.minUpdateIntervalMs||0)) - now
+    if(waitMs > 0) await sleep(waitMs)
+    state.lastSetActivityAtMs = Date.now()
+    return state.client.setActivity(clean).then(()=>{
+      try{ console.log('[DiscordRPC] activity updated successfully') }catch(_){ }
+      return true
+    }).catch((e)=>{
+      try{
+        const code = (e && (e.code || e.errorCode)) ? (e.code || e.errorCode) : ''
+        console.log('[DiscordRPC] setActivity error', e && e.message ? e.message : e, code)
+      }catch(_){ }
+      return false
+    })
+  }
+  state.setActivityPromise = state.setActivityPromise.then(doSet, doSet).then(()=>undefined)
+  return state.setActivityPromise.then(()=>true).catch(()=>false)
 }
 
 function setEnabled(enabled){
@@ -65,11 +161,9 @@ function init(applicationId, transport){
       if(state.lastActivity){
         try{ 
           console.log('[DiscordRPC] setting queued activity on ready')
-          client.setActivity(state.lastActivity).then(()=>{
-            console.log('[DiscordRPC] activity set successfully')
-          }).catch((e)=>{
-            console.log('[DiscordRPC] setActivity error', e && e.message)
-          })
+          queueSetActivity(state.lastActivity).then((ok)=>{
+            if(ok){ try{ console.log('[DiscordRPC] activity set successfully') }catch(_){ } }
+          }).catch(()=>{})
         }catch(_){ }
       }
     })
@@ -109,7 +203,7 @@ function init(applicationId, transport){
 function buildActivity(payload){
   if(!payload || typeof payload !== 'object') return null
   const details = payload.title || 'Listening'
-  const stateText = payload.artist ? (payload.album ? `${payload.artist} • ${payload.album}` : payload.artist) : (payload.album||'')
+  const stateText = payload.artist || ''
   const activity = { 
     details, 
     state: stateText,
@@ -117,11 +211,11 @@ function buildActivity(payload){
     type: 2
   }
   if(typeof payload.startTimestamp === 'number' && typeof payload.endTimestamp === 'number'){
-    activity.startTimestamp = Math.floor(payload.startTimestamp / 1000)
-    activity.endTimestamp = Math.floor(payload.endTimestamp / 1000)
+    activity.startTimestamp = payload.startTimestamp
+    activity.endTimestamp = payload.endTimestamp
   }
   if(payload.largeImageKey){ activity.largeImageKey = payload.largeImageKey }
-  if(payload.largeImageText){ activity.largeImageText = payload.largeImageText }
+  activity.largeImageText = payload.album || payload.largeImageText || undefined
   if(payload.smallImageKey){ activity.smallImageKey = payload.smallImageKey }
   if(payload.smallImageText){ activity.smallImageText = payload.smallImageText }
   if(payload.buttons && Array.isArray(payload.buttons)) activity.buttons = payload.buttons.slice(0,2)
@@ -136,14 +230,7 @@ function updatePresence(payload){
     try{ console.log('[DiscordRPC] update', activity) }catch(_){ }
     state.lastActivity = activity
     if(state.client && state.connected){
-      const doSet = ()=>{
-        return state.client.setActivity(activity).then(()=>{
-          try{ console.log('[DiscordRPC] activity updated successfully') }catch(_){ }
-        }).catch((e)=>{
-          try{ console.log('[DiscordRPC] setActivity error', e && e.message) }catch(_){ }
-        })
-      }
-      state.setActivityPromise = state.setActivityPromise.then(doSet, doSet).then(()=>undefined)
+      queueSetActivity(activity)
       return true
     }
     if(!state.client && state.applicationId && RPC){ try{ init(state.applicationId) }catch(_){ } }
@@ -155,9 +242,17 @@ function updatePresence(payload){
 function clear(){
   try{
     state.lastActivity = null
+    state.lastActivityString = null
     if(state.client && state.connected){
       try{ console.log('[DiscordRPC] clear') }catch(_){ }
-      try{ state.client.clearActivity() }catch(_){ }
+      const doClear = async ()=>{
+        const now = Date.now()
+        const waitMs = (state.lastSetActivityAtMs + (state.minUpdateIntervalMs||0)) - now
+        if(waitMs > 0) await sleep(waitMs)
+        state.lastSetActivityAtMs = Date.now()
+        try{ await state.client.clearActivity() }catch(_){ }
+      }
+      state.setActivityPromise = state.setActivityPromise.then(doClear, doClear).then(()=>undefined)
       return true
     }
     return false
