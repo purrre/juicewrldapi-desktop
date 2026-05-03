@@ -83,4 +83,9 @@ MIT
 
 ## Screenshots
 
+<img width="1442" height="855" alt="image" src="https://github.com/user-attachments/assets/948b21c3-69bd-441d-b96b-bfb03ad5365d" />
+<br><br>
 <img width="1254" height="817" alt="image" src="https://github.com/user-attachments/assets/0d021c0a-00e4-49fc-a997-564e454dbf98" />
+<br><br>
+<img width="1441" height="853" alt="image" src="https://github.com/user-attachments/assets/607925eb-32f5-463b-b756-37d12665178a" />
+
